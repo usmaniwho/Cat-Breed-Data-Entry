@@ -12,66 +12,112 @@ import requests
 
 
 # =========================
-# GitHub Release Model Configuration
+# GitHub Model Config
 # =========================
 MODEL_URL = "https://github.com/usmaniwho/Cat-Breed-Data-Entry/releases/download/v1.0/resnet50-model-augmentation.pth"
 MODEL_PATH = "resnet50-model-augmentation.pth"
 
+
+# =========================
+# Safe Model Download
+# =========================
 def download_model():
-    """Download model from GitHub Releases if not exists"""
-    if not os.path.exists(MODEL_PATH):
-        st.info("Downloading model from GitHub Releases...")
+    """Safely download model from GitHub Releases"""
 
-        try:
-            headers = {"User-Agent": "Mozilla/5.0"}  # avoids GitHub blocking
-            response = requests.get(MODEL_URL, headers=headers, stream=True)
+    if os.path.exists(MODEL_PATH) and os.path.getsize(MODEL_PATH) > 10000:
+        return MODEL_PATH
 
-            if response.status_code != 200:
-                raise Exception(f"HTTP {response.status_code}")
+    st.info("📥 Downloading model from GitHub Releases...")
 
-            with open(MODEL_PATH, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
 
-            st.success("Model downloaded successfully!")
+        response = requests.get(
+            MODEL_URL,
+            headers=headers,
+            stream=True,
+            allow_redirects=True,
+            timeout=60
+        )
 
-        except Exception as e:
-            st.error(f"Failed to download model: {e}")
-            return None
+        # 🚨 Check if GitHub returned HTML instead of file
+        content_type = response.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            raise Exception("GitHub returned HTML page instead of model file. Check release URL.")
 
-    return MODEL_PATH
+        if response.status_code != 200:
+            raise Exception(f"HTTP Error {response.status_code}")
 
+        # Save file
+        with open(MODEL_PATH, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        # 🚨 Validate file size (prevents corrupted downloads)
+        if os.path.getsize(MODEL_PATH) < 10000:
+            raise Exception("Downloaded file is too small → likely corrupted")
+
+        st.success("✅ Model downloaded successfully!")
+        return MODEL_PATH
+
+    except Exception as e:
+        st.error(f"❌ Model download failed: {e}")
+        return None
+
+
+# =========================
+# Load Model (Safe + PyTorch 2.6 fix)
+# =========================
 @st.cache_resource
-def load_model():
-    """Load the ResNet50 model with trained weights from GitHub Releases"""
+def load_model(cat_classes):
+    """Load trained ResNet50 model safely"""
 
     model_path = download_model()
     if model_path is None:
-        raise Exception("Model download failed")
+        return None
 
-    # Define model
-    model = models.resnet50(pretrained=False)
-    model.fc = nn.Linear(model.fc.in_features, len(CAT_CLASSES))
+    # Define model architecture
+    model = models.resnet50(weights=None)
+    model.fc = nn.Linear(model.fc.in_features, len(cat_classes))
 
-    # 🔥 FIX: PyTorch 2.6 issue
-    checkpoint = torch.load(
-        model_path,
-        map_location="cpu",
-        weights_only=False
-    )
+    try:
+        # 🔥 FIX for PyTorch 2.6
+        checkpoint = torch.load(
+            model_path,
+            map_location="cpu",
+            weights_only=False
+        )
 
-    # Handle different checkpoint formats
-    if isinstance(checkpoint, dict):
-        if "model" in checkpoint:
-            checkpoint = checkpoint["model"]
-        elif "state_dict" in checkpoint:
-            checkpoint = checkpoint["state_dict"]
+        # Handle different checkpoint formats
+        if isinstance(checkpoint, dict):
+            if "model" in checkpoint:
+                checkpoint = checkpoint["model"]
+            elif "state_dict" in checkpoint:
+                checkpoint = checkpoint["state_dict"]
 
-    model.load_state_dict(checkpoint)
-    model.eval()
+        # Fix: Remap keys from fc.0.weight -> fc.weight and fc.0.bias -> fc.bias
+        # This handles checkpoints saved with nn.Sequential structure
+        state_dict = {}
+        for key, value in checkpoint.items():
+            if key.startswith("fc.0."):
+                new_key = key.replace("fc.0.", "fc.")
+                state_dict[new_key] = value
+            elif key.startswith("fc."):
+                # Skip other fc.* keys that don't match our simple fc layer
+                continue
+            else:
+                state_dict[key] = value
 
-    return model
+        # Load with strict=False to ignore mismatched keys
+        model.load_state_dict(state_dict, strict=False)
+        model.eval()
+
+        return model
+
+    except Exception as e:
+        st.error(f"❌ Model loading failed: {e}")
+        return None
 
 st.title("🐱 Cat Data Entry")
 
@@ -96,7 +142,11 @@ transform = transforms.Compose([
 
 def predict_breed(image_bytes):
     """Predict cat breed from image bytes"""
-    model = load_model()
+    model = load_model(CAT_CLASSES)
+    
+    # Handle model loading failure
+    if model is None:
+        raise Exception("Failed to load model. Please refresh the page and try again.")
     
     # Load and preprocess image
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")

@@ -13,45 +13,31 @@ file_option = st.radio(
     horizontal=True
 )
 
-# Column headers matching the original CSV structure
-columns = ["Sample ID", "Date", "City", "Clinic", "Owner ID", "Age", "Age Group", "Sex", "Indoor/Outdoor", "Ticks", "Organ", "Number", "Size"]
-
-data_file = "cat_data.xlsx" if file_option == "Create new file" else "cat_data.csv"
+data_file = "cat_data.csv"
 
 if file_option == "Upload existing file":
-    uploaded_file = st.file_uploader("Upload Excel or CSV file", type=["xlsx", "csv"])
+    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
     if uploaded_file is not None:
-        # Determine file type and read accordingly
-        if uploaded_file.name.endswith(".xlsx"):
-            try:
-                uploaded_df = pd.read_excel(uploaded_file)
-                data_file = "cat_data_uploaded.xlsx"
-                uploaded_df.to_excel(data_file, index=False)
-                st.success(f"Loaded: {uploaded_file.name}")
-            except Exception as e:
-                st.error(f"Error reading Excel file: {e}")
-                uploaded_df = None
-        else:  # CSV
-            try:
-                uploaded_df = pd.read_csv(uploaded_file)
-                data_file = "cat_data_uploaded.csv"
-                uploaded_df.to_csv(data_file, index=False)
-                st.success(f"Loaded: {uploaded_file.name}")
-            except Exception as e:
-                st.error(f"Error reading CSV file: {e}")
-                uploaded_df = None
+        try:
+            uploaded_df = pd.read_csv(uploaded_file)
+            data_file = "cat_data_uploaded.csv"
+            uploaded_df.to_csv(data_file, index=False)
+            st.success(f"Loaded: {uploaded_file.name}")
+        except Exception as e:
+            st.error(f"Error reading CSV file: {e}")
+            uploaded_df = None
     else:
         st.info("Please upload a file or choose 'Create new file'")
 
 # Data entry form
 st.header("📝 Enter Cat Data")
 
-with st.form("data_form"):
+with st.form("data_form", clear_on_submit=True):
     sample_id = st.text_input("Sample ID")
     city = st.text_input("City")
     clinic = st.text_input("Clinic")
     owner = st.text_input("Owner ID")
-    age = st.number_input("Cat Age", min_value=0.0)
+    age = st.number_input("Cat Age", min_value=0, step=1, format="%d")
 
     age_group = st.selectbox("Age Group", ["Kitten","Young","Adult"])
     sex = st.selectbox("Sex", ["M","F"])
@@ -70,8 +56,8 @@ with st.form("data_form"):
 
 if submit:
     row = {
-        "Sample ID": sample_id,
         "Date": datetime.now().strftime("%Y-%m-%d"),
+        "Sample ID": sample_id,
         "City": city,
         "Clinic": clinic,
         "Owner ID": owner,
@@ -87,29 +73,28 @@ if submit:
 
     df = pd.DataFrame([row])
 
-    # Save based on file type
-    if data_file.endswith(".xlsx"):
-        if os.path.exists(data_file):
-            # Append to existing Excel file
-            existing_df = pd.read_excel(data_file)
-            combined_df = pd.concat([existing_df, df], ignore_index=True)
-            combined_df.to_excel(data_file, index=False)
-        else:
-            df.to_excel(data_file, index=False)
+    # CSV file handling
+    if os.path.exists(data_file):
+        df.to_csv(data_file, mode='a', header=False, index=False)
     else:
-        # CSV file
-        if os.path.exists(data_file):
-            df.to_csv(data_file, mode='a', header=False, index=False)
-        else:
-            df.to_csv(data_file, index=False)
+        df.to_csv(data_file, index=False)
 
     st.success(f"Data saved to {data_file}!")
+    st.rerun()
+
+# Download button for CSV file
+if os.path.exists(data_file):
+    st.header("💾 Download Data")
+    with open(data_file, "rb") as file:
+        st.download_button(
+            label="📥 Download CSV File",
+            data=file,
+            file_name="cat_data.csv",
+            mime="text/csv"
+        )
 
 # Display current data
 if os.path.exists(data_file):
     st.header("📊 Current Data")
-    if data_file.endswith(".xlsx"):
-        display_df = pd.read_excel(data_file)
-    else:
-        display_df = pd.read_csv(data_file)
+    display_df = pd.read_csv(data_file)
     st.dataframe(display_df)

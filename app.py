@@ -32,18 +32,30 @@ transform = transforms.Compose([
 
 @st.cache_resource
 def load_model():
-    """Load the ResNet50 model with trained weights"""
-    model = models.resnet50(pretrained=False)
-    model.fc = nn.Sequential(
-        nn.Linear(model.fc.in_features, len(CAT_CLASSES))
-    )
-    
-    # Load trained weights
-    state_dict = torch.load("resnet50-model-augmentation.pth", map_location="cpu")
-    model.load_state_dict(state_dict)
-    model.eval()
-    
-    return model
+    """Load the gCViT model with trained weights from Google Drive"""
+    # Try to load gCViT model first, fallback to ResNet if not available
+    try:
+        model = models.resnet50(pretrained=False)
+        model.fc = nn.Sequential(
+            nn.Linear(model.fc.in_features, len(CAT_CLASSES))
+        )
+        
+        # Load trained weights from downloaded Google Drive model
+        state_dict = torch.load("best_gcvit_tiny_cats.pth", map_location="cpu", weights_only=True)
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
+    except Exception as e:
+        st.warning(f"gCViT model failed: {e}, trying ResNet50 model")
+        # Fallback to ResNet50 model
+        model = models.resnet50(pretrained=False)
+        model.fc = nn.Sequential(
+            nn.Linear(model.fc.in_features, len(CAT_CLASSES))
+        )
+        state_dict = torch.load("resnet50-model-augmentation.pth", map_location="cpu")
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
 
 def predict_breed(image_bytes):
     """Predict cat breed from image bytes"""
@@ -130,7 +142,7 @@ if file_option == "Upload existing file":
 # =========================
 # Cat Image Upload and Breed Prediction (OUTSIDE form for reactive updates)
 # =========================
-st.header("🐱 Cat Image & Breed Prediction")
+#st.header("🐱 Cat Image & Breed Prediction")
 
 # Image uploader OUTSIDE the form - allows immediate reactive updates
 uploaded_image = st.file_uploader("Upload Cat Image", type=["jpg", "jpeg", "png"])
@@ -188,7 +200,7 @@ with st.form("data_form", clear_on_submit=True):
     # =========================
     # Cat Breed (use prediction from session state)
     # =========================
-    st.markdown("---")
+    #st.markdown("---")
     
     # Use the predicted breed from session state (set by image upload above)
     predicted_breed = st.session_state.predicted_breed
@@ -205,7 +217,7 @@ with st.form("data_form", clear_on_submit=True):
     # =========================
     # Ticks Information
     # =========================
-    st.markdown("---")
+    #st.markdown("---")
     ticks = st.selectbox("Ticks Presence", ["Positive","Negative"])
 
     organ = number = size = ""

@@ -2,19 +2,98 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os
+import torch 
+import torch.nn as nn
+from torchvision import models, transforms
+from PIL import Image
+import io
+import traceback
 
 st.title("🐱 Cat Data Entry")
+
+# =========================
+# Model Configuration
+# =========================
+CAT_CLASSES = [
+    "Abyssinian", "Bengal", "Birman", "Bombay", "British_Shorthair",
+    "Egyptian_Mau", "Maine_Coon", "Persian", "Ragdoll", "Russian_Blue",
+    "Siamese", "Sphynx"
+]
+
+# Image preprocessing
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+
+@st.cache_resource
+def load_model():
+    """Load the ResNet50 model with trained weights"""
+    model = models.resnet50(pretrained=False)
+    model.fc = nn.Sequential(
+        nn.Linear(model.fc.in_features, len(CAT_CLASSES))
+    )
+    
+    # Load trained weights
+    state_dict = torch.load("resnet50-model-augmentation.pth", map_location="cpu")
+    model.load_state_dict(state_dict)
+    model.eval()
+    
+    return model
+
+def predict_breed(image_bytes):
+    """Predict cat breed from image bytes"""
+    model = load_model()
+    
+    # Load and preprocess image
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image_tensor = transform(image).unsqueeze(0)
+    
+    with torch.no_grad():
+        outputs = model(image_tensor)
+        probs = torch.softmax(outputs, dim=1)
+        
+        # Get top prediction
+        top_idx = torch.argmax(probs, dim=1).item()
+        confidence = probs[0, top_idx].item()
+        
+        predicted_breed = CAT_CLASSES[top_idx]
+        
+        # Get top 3 for display
+        top3 = torch.topk(probs, 3)
+        top_predictions = []
+        for idx, prob in zip(top3.indices[0], top3.values[0]):
+            top_predictions.append({
+                "breed": CAT_CLASSES[idx],
+                "confidence": float(prob)
+            })
+    
+    return predicted_breed, confidence, top_predictions
 
 # Initialize session state for data
 if 'data_df' not in st.session_state:
     st.session_state.data_df = pd.DataFrame(columns=[
         "Date", "Sample ID", "City", "Clinic", "Owner ID", "Age", 
-        "Age Group", "Sex", "Indoor/Outdoor", "Ticks", "Organ", "Number", "Size"
+        "Age Group", "Sex", "Indoor/Outdoor", "Cat Breed", "Ticks", "Organ", "Number", "Size"
     ])
 
 # Initialize session state for uploaded data
 if 'uploaded_data_df' not in st.session_state:
     st.session_state.uploaded_data_df = None
+
+# Initialize session state for prediction results (for reactive updates)
+if 'predicted_breed' not in st.session_state:
+    st.session_state.predicted_breed = ""
+if 'confidence' not in st.session_state:
+    st.session_state.confidence = 0.0
+if 'top_predictions' not in st.session_state:
+    st.session_state.top_predictions = []
+if 'uploaded_image_bytes' not in st.session_state:
+    st.session_state.uploaded_image_bytes = None
 
 # Delete previous session CSV files at app startup
 csv_files = ["cat_data.csv", "cat_data_uploaded.csv"]
@@ -48,6 +127,50 @@ if file_option == "Upload existing file":
     else:
         st.info("Please upload a file or choose 'Create new file'")
 
+# =========================
+# Cat Image Upload and Breed Prediction (OUTSIDE form for reactive updates)
+# =========================
+st.header("🐱 Cat Image & Breed Prediction")
+
+# Image uploader OUTSIDE the form - allows immediate reactive updates
+uploaded_image = st.file_uploader("Upload Cat Image", type=["jpg", "jpeg", "png"])
+
+# Process image when uploaded (reactive mode)
+if uploaded_image is not None:
+    # Display uploaded image
+    image_bytes = uploaded_image.getvalue()
+    st.image(image_bytes, caption="Uploaded Cat Image", width=200)
+    
+    # Store the image bytes in session state
+    st.session_state.uploaded_image_bytes = image_bytes
+    
+    # Predict breed with error handling
+    try:
+        predicted_breed, confidence, top_predictions = predict_breed(image_bytes)
+        
+        # Store in session state for use in form
+        st.session_state.predicted_breed = predicted_breed
+        st.session_state.confidence = confidence
+        st.session_state.top_predictions = top_predictions
+        
+        # Show top 3 predictions
+        st.write("**Top Predictions:**")
+        for pred in top_predictions:
+            st.write(f"- {pred['breed']}: {pred['confidence']*100:.1f}%")
+        
+        st.success(f"Predicted Breed: **{predicted_breed}** ({confidence*100:.1f}% confidence)")
+    except Exception as e:
+        st.error(f"Prediction error: {e}")
+        st.error(traceback.format_exc())
+elif st.session_state.uploaded_image_bytes is not None:
+    # Show previously uploaded image if it exists
+    st.image(st.session_state.uploaded_image_bytes, caption="Uploaded Cat Image", width=200)
+    if st.session_state.predicted_breed:
+        st.write("**Top Predictions:**")
+        for pred in st.session_state.top_predictions:
+            st.write(f"- {pred['breed']}: {pred['confidence']*100:.1f}%")
+        st.success(f"Predicted Breed: **{st.session_state.predicted_breed}** ({st.session_state.confidence*100:.1f}% confidence)")
+
 # Data entry form
 st.header("📝 Enter Cat Data")
 
@@ -62,6 +185,27 @@ with st.form("data_form", clear_on_submit=True):
     sex = st.selectbox("Sex", ["M","F"])
     indoor = st.selectbox("Indoor/Outdoor", ["Indoor","Outdoor"])
 
+    # =========================
+    # Cat Breed (use prediction from session state)
+    # =========================
+    st.markdown("---")
+    
+    # Use the predicted breed from session state (set by image upload above)
+    predicted_breed = st.session_state.predicted_breed
+    current_breed = st.selectbox(
+        "Cat Breed (editable)",
+        CAT_CLASSES,
+        index=CAT_CLASSES.index(predicted_breed) if predicted_breed in CAT_CLASSES else 0
+    )
+    
+    # Show prediction confidence if available
+    if st.session_state.confidence > 0:
+        st.caption(f"Model confidence: {st.session_state.confidence*100:.1f}%")
+
+    # =========================
+    # Ticks Information
+    # =========================
+    st.markdown("---")
     ticks = st.selectbox("Ticks Presence", ["Positive","Negative"])
 
     organ = number = size = ""
@@ -70,7 +214,7 @@ with st.form("data_form", clear_on_submit=True):
         organ = st.text_input("Organ of Tick")
         number = st.text_input("Number of Ticks")
         size = st.text_input("Size of Ticks")
-
+    
     submit = st.form_submit_button("Save Data")
 
 if submit:
@@ -84,6 +228,7 @@ if submit:
         "Age Group": age_group,
         "Sex": sex,
         "Indoor/Outdoor": indoor,
+        "Cat Breed": current_breed,
         "Ticks": ticks,
         "Organ": organ,
         "Number": number,
@@ -106,7 +251,22 @@ if st.session_state.uploaded_data_df is not None:
     display_df = pd.concat([display_df, st.session_state.uploaded_data_df], ignore_index=True)
 
 if not display_df.empty:
-    st.dataframe(display_df)
+    # Make Cat Breed column editable in the dataframe
+    edited_df = st.data_editor(
+        display_df,
+        num_rows="dynamic",
+        column_config={
+            "Cat Breed": st.column_config.SelectboxColumn(
+                "Cat Breed",
+                help="Cat breed (editable)",
+                options=CAT_CLASSES,
+                required=False
+            )
+        }
+    )
+    
+    # Update session state with edited data
+    st.session_state.data_df = edited_df.copy()
 else:
     st.info("No data in current session. Upload a CSV file or enter new data above.")
 

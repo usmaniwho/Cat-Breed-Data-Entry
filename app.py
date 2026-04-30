@@ -8,6 +8,62 @@ from torchvision import models, transforms
 from PIL import Image
 import io
 import traceback
+import requests
+
+
+# =========================
+# Google Drive Model Configuration
+# =========================
+# Model files configuration - Google Drive file IDs
+GDRIVE_MODELS = {
+    "resnet50-model-augmentation.pth": "19cYCZaJF9-9_0ynxFvvgWEUjdm0d6M8B"  # ResNet50 model
+}
+
+def download_from_google_drive(file_id, destination):
+    """Download file from Google Drive using the file ID"""
+    URL = "https://docs.google.com/uc?export=download"
+    
+    session = requests.Session()
+    response = session.get(URL, params={'id': file_id}, stream=True)
+    
+    if response.status_code != 200:
+        raise Exception(f"Failed to download from Google Drive: HTTP {response.status_code}")
+    
+    # Check if it's a confirmation page
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
+    
+    if token:
+        params = {'id': file_id, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+    
+    # Save file
+    with open(destination, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=32768):
+            if chunk:
+                f.write(chunk)
+    
+    return destination
+
+def get_model_path(model_filename):
+    """Get local path for model, download if not exists"""
+    if not os.path.exists(model_filename):
+        st.info(f"Downloading {model_filename} from Google Drive...")
+        file_id = GDRIVE_MODELS.get(model_filename)
+        if file_id:
+            try:
+                download_from_google_drive(file_id, model_filename)
+                st.success(f"Downloaded {model_filename}")
+            except Exception as e:
+                st.error(f"Failed to download {model_filename}: {e}")
+                return None
+        else:
+            st.error(f"Google Drive file ID not configured for {model_filename}")
+            return None
+    return model_filename
 
 st.title("🐱 Cat Data Entry")
 
@@ -32,30 +88,24 @@ transform = transforms.Compose([
 
 @st.cache_resource
 def load_model():
-    """Load the gCViT model with trained weights from Google Drive"""
-    # Try to load gCViT model first, fallback to ResNet if not available
-    try:
-        model = models.resnet50(pretrained=False)
-        model.fc = nn.Sequential(
-            nn.Linear(model.fc.in_features, len(CAT_CLASSES))
-        )
-        
-        # Load trained weights from downloaded Google Drive model
-        state_dict = torch.load("best_gcvit_tiny_cats.pth", map_location="cpu", weights_only=True)
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
-    except Exception as e:
-        st.warning(f"gCViT model failed: {e}, trying ResNet50 model")
-        # Fallback to ResNet50 model
-        model = models.resnet50(pretrained=False)
-        model.fc = nn.Sequential(
-            nn.Linear(model.fc.in_features, len(CAT_CLASSES))
-        )
-        state_dict = torch.load("resnet50-model-augmentation.pth", map_location="cpu")
-        model.load_state_dict(state_dict)
-        model.eval()
-        return model
+    """Load the ResNet50 model with trained weights from Google Drive"""
+    # Get model path (downloads if not exists)
+    model_path = get_model_path("resnet50-model-augmentation.pth")
+    
+    if model_path is None:
+        raise Exception("Failed to download model from Google Drive")
+    
+    # Load ResNet50 model
+    model = models.resnet50(pretrained=False)
+    model.fc = nn.Sequential(
+        nn.Linear(model.fc.in_features, len(CAT_CLASSES))
+    )
+    
+    # Load trained weights
+    state_dict = torch.load(model_path, map_location="cpu")
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
 
 def predict_breed(image_bytes):
     """Predict cat breed from image bytes"""

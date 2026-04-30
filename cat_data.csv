@@ -1,0 +1,4 @@
+Sample ID,Date,City,Clinic,Owner ID,Age,Age Group,Sex,Indoor/Outdoor,Ticks,Organ,Number,Size
+001,2026-04-15,,,,0.0,Kitten,M,Indoor,Positive,,,
+001,2026-04-15,Lahore,Johar Town,001,0.03,Young,M,Indoor,Negative,,,
+001,2026-04-15,Lahore,Johar Town,001,0.03,Young,M,Indoor,Negative,,,

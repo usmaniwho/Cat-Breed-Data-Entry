@@ -5,6 +5,26 @@ import os
 
 st.title("🐱 Cat Data Entry")
 
+# Initialize session state for data
+if 'data_df' not in st.session_state:
+    st.session_state.data_df = pd.DataFrame(columns=[
+        "Date", "Sample ID", "City", "Clinic", "Owner ID", "Age", 
+        "Age Group", "Sex", "Indoor/Outdoor", "Ticks", "Organ", "Number", "Size"
+    ])
+
+# Initialize session state for uploaded data
+if 'uploaded_data_df' not in st.session_state:
+    st.session_state.uploaded_data_df = None
+
+# Delete previous session CSV files at app startup
+csv_files = ["cat_data.csv", "cat_data_uploaded.csv"]
+for csv_file in csv_files:
+    if os.path.exists(csv_file):
+        try:
+            os.remove(csv_file)
+        except Exception as e:
+            pass  # Ignore errors - file may be in use
+
 # File handling options
 st.header("📁 Data File Option")
 file_option = st.radio(
@@ -15,17 +35,16 @@ file_option = st.radio(
 
 data_file = "cat_data.csv"
 
+# Store uploaded data separately in session state (preserves original uploaded data)
 if file_option == "Upload existing file":
     uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
     if uploaded_file is not None:
         try:
-            uploaded_df = pd.read_csv(uploaded_file)
-            data_file = "cat_data_uploaded.csv"
-            uploaded_df.to_csv(data_file, index=False)
+            st.session_state.uploaded_data_df = pd.read_csv(uploaded_file)
             st.success(f"Loaded: {uploaded_file.name}")
         except Exception as e:
             st.error(f"Error reading CSV file: {e}")
-            uploaded_df = None
+            st.session_state.uploaded_data_df = None
     else:
         st.info("Please upload a file or choose 'Create new file'")
 
@@ -71,30 +90,33 @@ if submit:
         "Size": size
     }
 
-    df = pd.DataFrame([row])
+    # Add to session state (not persisted to CSV)
+    new_row_df = pd.DataFrame([row])
+    st.session_state.data_df = pd.concat([st.session_state.data_df, new_row_df], ignore_index=True)
 
-    # CSV file handling
-    if os.path.exists(data_file):
-        df.to_csv(data_file, mode='a', header=False, index=False)
-    else:
-        df.to_csv(data_file, index=False)
-
-    st.success(f"Data saved to {data_file}!")
-    st.rerun()
-
-# Download button for CSV file
-if os.path.exists(data_file):
-    st.header("💾 Download Data")
-    with open(data_file, "rb") as file:
-        st.download_button(
-            label="📥 Download CSV File",
-            data=file,
-            file_name="cat_data.csv",
-            mime="text/csv"
-        )
+    st.success("Data saved for current session!")
 
 # Display current data
-if os.path.exists(data_file):
-    st.header("📊 Current Data")
-    display_df = pd.read_csv(data_file)
+st.header("📊 Current Data")
+
+# Show all data - merge uploaded data with session state data
+display_df = st.session_state.data_df.copy()
+if st.session_state.uploaded_data_df is not None:
+    # Add uploaded data to existing session data (don't overwrite)
+    display_df = pd.concat([display_df, st.session_state.uploaded_data_df], ignore_index=True)
+
+if not display_df.empty:
     st.dataframe(display_df)
+else:
+    st.info("No data in current session. Upload a CSV file or enter new data above.")
+
+# Download button for current session data (includes both entered and uploaded data)
+if not display_df.empty:
+    st.header("💾 Download Data")
+    csv = display_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Download CSV File",
+        data=csv,
+        file_name="cat_data.csv",
+        mime="text/csv"
+    )

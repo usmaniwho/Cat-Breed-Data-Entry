@@ -12,58 +12,66 @@ import requests
 
 
 # =========================
-# Google Drive Model Configuration
+# GitHub Release Model Configuration
 # =========================
-# Model files configuration - Google Drive file IDs
-GDRIVE_MODELS = {
-    "resnet50-model-augmentation.pth": "19cYCZaJF9-9_0ynxFvvgWEUjdm0d6M8B"  # ResNet50 model
-}
+MODEL_URL = "https://github.com/usmaniwho/Cat-Breed-Data-Entry/releases/download/v1.0/resnet50-model-augmentation.pth"
+MODEL_PATH = "resnet50-model-augmentation.pth"
 
-def download_from_google_drive(file_id, destination):
-    """Download file from Google Drive using the file ID"""
-    URL = "https://docs.google.com/uc?export=download"
-    
-    session = requests.Session()
-    response = session.get(URL, params={'id': file_id}, stream=True)
-    
-    if response.status_code != 200:
-        raise Exception(f"Failed to download from Google Drive: HTTP {response.status_code}")
-    
-    # Check if it's a confirmation page
-    token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            token = value
-            break
-    
-    if token:
-        params = {'id': file_id, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-    
-    # Save file
-    with open(destination, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=32768):
-            if chunk:
-                f.write(chunk)
-    
-    return destination
+def download_model():
+    """Download model from GitHub Releases if not exists"""
+    if not os.path.exists(MODEL_PATH):
+        st.info("Downloading model from GitHub Releases...")
 
-def get_model_path(model_filename):
-    """Get local path for model, download if not exists"""
-    if not os.path.exists(model_filename):
-        st.info(f"Downloading {model_filename} from Google Drive...")
-        file_id = GDRIVE_MODELS.get(model_filename)
-        if file_id:
-            try:
-                download_from_google_drive(file_id, model_filename)
-                st.success(f"Downloaded {model_filename}")
-            except Exception as e:
-                st.error(f"Failed to download {model_filename}: {e}")
-                return None
-        else:
-            st.error(f"Google Drive file ID not configured for {model_filename}")
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}  # avoids GitHub blocking
+            response = requests.get(MODEL_URL, headers=headers, stream=True)
+
+            if response.status_code != 200:
+                raise Exception(f"HTTP {response.status_code}")
+
+            with open(MODEL_PATH, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            st.success("Model downloaded successfully!")
+
+        except Exception as e:
+            st.error(f"Failed to download model: {e}")
             return None
-    return model_filename
+
+    return MODEL_PATH
+
+@st.cache_resource
+def load_model():
+    """Load the ResNet50 model with trained weights from GitHub Releases"""
+
+    model_path = download_model()
+    if model_path is None:
+        raise Exception("Model download failed")
+
+    # Define model
+    model = models.resnet50(pretrained=False)
+    model.fc = nn.Linear(model.fc.in_features, len(CAT_CLASSES))
+
+    # 🔥 FIX: PyTorch 2.6 issue
+    checkpoint = torch.load(
+        model_path,
+        map_location="cpu",
+        weights_only=False
+    )
+
+    # Handle different checkpoint formats
+    if isinstance(checkpoint, dict):
+        if "model" in checkpoint:
+            checkpoint = checkpoint["model"]
+        elif "state_dict" in checkpoint:
+            checkpoint = checkpoint["state_dict"]
+
+    model.load_state_dict(checkpoint)
+    model.eval()
+
+    return model
 
 st.title("🐱 Cat Data Entry")
 
@@ -85,27 +93,6 @@ transform = transforms.Compose([
         std=[0.229, 0.224, 0.225]
     )
 ])
-
-@st.cache_resource
-def load_model():
-    """Load the ResNet50 model with trained weights from Google Drive"""
-    # Get model path (downloads if not exists)
-    model_path = get_model_path("resnet50-model-augmentation.pth")
-    
-    if model_path is None:
-        raise Exception("Failed to download model from Google Drive")
-    
-    # Load ResNet50 model
-    model = models.resnet50(pretrained=False)
-    model.fc = nn.Sequential(
-        nn.Linear(model.fc.in_features, len(CAT_CLASSES))
-    )
-    
-    # Load trained weights
-    state_dict = torch.load(model_path, map_location="cpu")
-    model.load_state_dict(state_dict)
-    model.eval()
-    return model
 
 def predict_breed(image_bytes):
     """Predict cat breed from image bytes"""
